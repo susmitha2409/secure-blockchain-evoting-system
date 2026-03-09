@@ -116,6 +116,10 @@ Network Components:
 
 ---
 
+## Architecture Diagram
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/fe295d99-8d50-4bdb-af5d-052a0480aae3" />
+
+
 ## 4. Technology Stack
 
 | Component | Technology | Version | Justification |
