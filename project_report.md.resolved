@@ -1,0 +1,721 @@
+# 🗳️ National E-Voting Blockchain System — Project Report
+
+---
+
+## Table of Contents
+
+1. [Problem Statement](#1-problem-statement)
+2. [Objectives](#2-objectives)
+3. [System Architecture](#3-system-architecture)
+4. [Technology Stack](#4-technology-stack)
+5. [Key Concepts Used](#5-key-concepts-used)
+6. [Project Structure & File Documentation](#6-project-structure--file-documentation)
+7. [Smart Contract (Chaincode) Design](#7-smart-contract-chaincode-design)
+8. [REST API Reference](#8-rest-api-reference)
+9. [Frontend Application](#9-frontend-application)
+10. [Data Flow & Sequence Diagrams](#10-data-flow--sequence-diagrams)
+11. [Security Mechanisms](#11-security-mechanisms)
+12. [Testing & Attack Simulations](#12-testing--attack-simulations)
+13. [Setup & Deployment Plan](#13-setup--deployment-plan)
+
+---
+
+## 1. Problem Statement
+
+Traditional voting systems in India face critical challenges that undermine democratic integrity:
+
+| Challenge | Impact |
+|-----------|--------|
+| **Voter fraud & rigging** | Duplicate voting, booth capturing, and ballot tampering |
+| **Lack of transparency** | Voters cannot independently verify that their vote was counted correctly |
+| **Centralized control** | Single point of failure; manipulation by insiders is possible |
+| **Delayed results** | Manual counting introduces delays and human error |
+| **No audit trail** | Once an election is over, forensic verification is nearly impossible |
+
+> [!IMPORTANT]
+> This project addresses these issues by building a **decentralized, tamper-proof e-voting system** powered by **Hyperledger Fabric blockchain**, ensuring **transparency, immutability, and verifiability** of every vote cast at a national scale.
+
+---
+
+## 2. Objectives
+
+1. **Eliminate duplicate voting** — Enforce one-person-one-vote via cryptographic hashing and on-chain state checks.
+2. **Ensure vote immutability** — Every vote is a blockchain transaction that cannot be altered or deleted.
+3. **Provide a full audit trail** — Election Commission observers can trace the complete history of any voter or constituency.
+4. **Role-based access control** — Only the Election Commission (EC) can create constituencies, register candidates/voters, and start/end elections.
+5. **Real-time results** — Public-facing result queries read directly from the blockchain ledger.
+6. **Cross-constituency protection** — Voters can only cast votes for candidates in their registered constituency.
+7. **Election lifecycle management** — Constituencies go through `CREATED → VOTING → CLOSED` phases, and votes are only accepted during the `VOTING` phase.
+
+---
+
+## 3. System Architecture
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        Browser["🌐 Browser (React SPA)<br/>Port 3001"]
+    end
+
+    subgraph "Backend Layer"
+        Express["⚙️ Express.js REST API<br/>Port 3000"]
+        Auth["🔐 Auth Middleware<br/>(x-api-key)"]
+        Gateway["🔗 Fabric Gateway<br/>(fabric-network SDK)"]
+    end
+
+    subgraph "Blockchain Layer (Docker — WSL)"
+        CA["🏛️ Fabric CA<br/>(Certificate Authority)"]
+        Peer["📦 Peer Node<br/>(peer0.org1)"]
+        Orderer["📋 Orderer Node<br/>(orderer.example.com)"]
+        Chaincode["📜 Smart Contract<br/>(EvotingContract)"]
+        Ledger["📒 World State<br/>(CouchDB / LevelDB)"]
+    end
+
+    Browser -- "HTTP / Axios" --> Express
+    Express --> Auth
+    Auth --> Gateway
+    Gateway -- "gRPC + TLS" --> Peer
+    Gateway -- "gRPC + TLS" --> Orderer
+    Peer --> Chaincode
+    Chaincode --> Ledger
+    CA -- "X.509 Certificates" --> Peer
+    CA -- "X.509 Certificates" --> Orderer
+```
+
+### Architecture Overview
+
+The system follows a **three-tier architecture**:
+
+| Tier | Technology | Responsibility |
+|------|-----------|----------------|
+| **Presentation** | React.js SPA (port 3001) | User interface for voters, public results, and admin dashboard |
+| **Application** | Express.js API (port 3000) | REST endpoints, authentication, Fabric SDK gateway |
+| **Data / Blockchain** | Hyperledger Fabric (Docker containers via WSL) | Immutable ledger, smart contract execution, consensus |
+
+---
+
+## 4. Technology Stack
+
+### Backend
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| **Node.js** | v18.x | Server runtime |
+| **Express.js** | v4.18.2 | REST API framework |
+| **fabric-network** | v2.2.20 | Hyperledger Fabric SDK for submitting/evaluating transactions |
+| **fabric-ca-client** | v2.2.20 | Enrollment of admin identities with the Fabric CA |
+| **dotenv** | v16.4.5 | Environment variable management |
+| **cors** | v2.8.5 | Cross-Origin Resource Sharing |
+| **morgan** | v1.10.0 | HTTP request logging |
+| **nodemon** | v3.0.3 | Development auto-restart (dev dependency) |
+
+### Frontend
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| **React** | v18.2.0 | Component-based UI framework |
+| **React Router DOM** | v6.22.0 | Client-side routing and navigation |
+| **Axios** | v1.6.7 | HTTP client for API calls |
+| **react-scripts** | v5.0.1 | Build toolchain (Create React App) |
+
+### Blockchain
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| **Hyperledger Fabric** | v2.5.15 | Permissioned blockchain framework |
+| **Hyperledger Fabric CA** | v1.5.17 | Certificate Authority for identity management |
+| **Docker** | Latest | Containerized network nodes |
+| **WSL 2** | — | Linux subsystem to run Fabric on Windows |
+
+### Infrastructure
+| Tool | Purpose |
+|------|---------|
+| **Docker Desktop** | Container orchestration for Fabric nodes |
+| **WSL 2 (Ubuntu)** | Required Linux environment for Fabric binaries |
+| **Git** | Version control |
+| **NVM** | Node.js version management within WSL |
+
+---
+
+## 5. Key Concepts Used
+
+### 5.1 Hyperledger Fabric — Permissioned Blockchain
+
+Unlike public blockchains (Bitcoin, Ethereum), Hyperledger Fabric is a **permissioned** blockchain where:
+- All participants have **known identities** (via X.509 certificates).
+- Only authorized organizations can join the network.
+- **No cryptocurrency or mining** — consensus is achieved through an ordering service.
+- The ledger is private to the network participants.
+
+> [!NOTE]
+> This makes Fabric ideal for government-level applications like e-voting, where participant identity verification is mandatory.
+
+### 5.2 Smart Contracts (Chaincode)
+
+The business logic of the voting system lives in a **chaincode** — a Node.js smart contract deployed to the Fabric peer nodes. It defines:
+- What data can be stored on the blockchain (constituencies, voters, candidates, votes)
+- What operations are allowed (create, register, vote, query)
+- What validations are enforced (duplicate checks, phase checks, constituency matching)
+
+### 5.3 Fabric Network Components
+
+| Component | Role |
+|-----------|------|
+| **Peer Node** (`peer0.org1`) | Hosts the chaincode, maintains a copy of the ledger, endorses transactions |
+| **Orderer** (`orderer.example.com`) | Orders transactions into blocks, ensures consistency across peers |
+| **Certificate Authority** (`ca.org1`) | Issues X.509 digital certificates for identity management |
+| **Channel** (`mychannel`) | A private communication sub-network; all voting data lives on this channel |
+
+### 5.4 SHA-256 Hashing for Voter Privacy
+
+Voter EPIC (Electors Photo Identity Card) numbers are **never stored in plaintext** on the blockchain. Instead, the chaincode hashes the EPIC number using **SHA-256** before storing it:
+
+```javascript
+_hashEPIC(epicNumber) {
+    return crypto.createHash('sha256')
+        .update(epicNumber)
+        .digest('hex');
+}
+```
+
+This ensures **voter privacy** — even if the ledger is inspected, real voter identities remain protected.
+
+### 5.5 Membership Service Provider (MSP)
+
+Every operation on the blockchain is tied to an **MSP identity**. The chaincode enforces that only **Org1MSP** (representing the Election Commission) can:
+- Create constituencies
+- Register voters and candidates
+- Start and end elections
+
+```javascript
+_requireMSP(ctx, "Org1MSP", "Only Election Commission can perform this action");
+```
+
+### 5.6 Transaction Types
+
+| Type | SDK Method | Description |
+|------|-----------|-------------|
+| **Submit** (Write) | `contract.submitTransaction()` | Writes to the ledger; requires endorsement and ordering (consensus) |
+| **Evaluate** (Read) | `contract.evaluateTransaction()` | Reads from the local ledger copy; no consensus required; fast |
+
+### 5.7 Election Lifecycle (State Machine)
+
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED : createConstituency()
+    CREATED --> VOTING : startElection()
+    VOTING --> CLOSED : endElection()
+    CLOSED --> [*]
+
+    note right of CREATED : Candidates & voters\ncan be registered
+    note right of VOTING : Votes can be cast
+    note right of CLOSED : Results are final\nNo more votes
+```
+
+### 5.8 Deterministic Timestamps
+
+The chaincode uses the **transaction timestamp** from the blockchain (not `Date.now()`) to ensure all peers agree on the same timestamp for a vote:
+
+```javascript
+_getDeterministicTimestamp(ctx) {
+    const txTime = ctx.stub.getTxTimestamp();
+    const seconds = txTime.seconds.low;
+    const nanos = txTime.nanos;
+    return new Date(seconds * 1000 + nanos / 1000000).toISOString();
+}
+```
+
+### 5.9 Connection Profile & Wallet
+
+- **Connection Profile** (`connection-org1.json`): A JSON file containing the network topology — peer URLs, orderer URLs, TLS certificates, and CA information. Generated dynamically by reading certs from the running Fabric network.
+- **Wallet** (`./wallet/`): A directory storing enrolled admin X.509 certificates and private keys. The backend uses these to authenticate with the Fabric network.
+
+---
+
+## 6. Project Structure & File Documentation
+
+```
+chain/
+├── .env                              # Environment variables
+├── app.js                            # Express.js server entry point
+├── package.json                      # Backend dependencies & scripts
+├── bootstrap.sh                      # Fabric binary & Docker image downloader
+│
+├── fabric/
+│   └── gateway.js                    # Fabric SDK gateway (submit/evaluate)
+│
+├── middleware/
+│   └── auth.js                       # EC API-key authentication middleware
+│
+├── routes/
+│   ├── admin.js                      # Election Commission admin routes
+│   ├── voter.js                      # Voter registration & vote casting
+│   ├── results.js                    # Public results & constituency status
+│   └── audit.js                      # Audit trail endpoints (EC-only)
+│
+├── scripts/
+│   ├── buildConnectionProfile.js     # Generates connection-org1.json from TLS certs
+│   └── enrollAdmin.js                # Enrolls admin identity into wallet
+│
+├── tests/
+│   └── failureSimulations.js         # 8-test attack & defense simulation suite
+│
+├── config/
+│   ├── configtx.yaml                 # Fabric channel configuration
+│   ├── core.yaml                     # Peer node configuration
+│   └── orderer.yaml                  # Orderer node configuration
+│
+├── bin/                              # Fabric CLI binaries (peer, orderer, cryptogen, etc.)
+├── builders/ccaas/                   # Chaincode-as-a-service build scripts
+│
+├── wsl_setup.sh                      # WSL helper: npm run setup
+├── wsl_start.sh                      # WSL helper: npm start
+├── wsl_frontend.sh                   # WSL helper: start frontend
+├── wsl_test.sh                       # WSL helper: run simulations
+│
+├── fabric-samples/
+│   ├── test-network/
+│   │   ├── deploy.sh                 # One-shot deployment script
+│   │   ├── network.sh                # Fabric test-network lifecycle
+│   │   └── scripts/                  # Channel & chaincode deployment helpers
+│   └── evoting-chaincode/
+│       ├── package.json              # Chaincode dependencies
+│       ├── index.js                  # Chaincode entry point
+│       └── lib/
+│           └── evotingContract.js    # Smart contract (11 functions)
+│
+└── evoting-frontend/
+    ├── package.json                  # Frontend dependencies
+    ├── public/                       # Static assets
+    └── src/
+        ├── App.js                    # Root component + routing
+        ├── index.js                  # React entry point
+        ├── styles.css                # Global stylesheet
+        ├── context/
+        │   └── AuthContext.js        # Auth state management (React Context)
+        ├── services/
+        │   └── api.js                # Axios HTTP client for backend API
+        ├── components/
+        │   ├── Sidebar.jsx           # Navigation sidebar
+        │   ├── CandidateCard.jsx     # Candidate display card
+        │   └── StatusBadge.jsx       # Election phase status badge
+        └── pages/
+            ├── PublicResults.jsx     # Homepage — public result lookup
+            ├── VoterBooth.jsx        # Voter authentication & ballot
+            ├── AdminLogin.jsx        # Admin login form
+            ├── AdminDashboard.jsx    # Admin overview dashboard
+            ├── ConstituencyPage.jsx  # Constituency management
+            ├── CandidatesPage.jsx    # Candidate management
+            ├── ResultsPage.jsx       # Admin results view
+            └── AuditPage.jsx        # Audit trail viewer
+```
+
+### File-by-File Details
+
+#### Backend Core
+
+| File | Lines | Description |
+|------|-------|-------------|
+| [app.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/app.js) | 85 | Express server entry point. Configures CORS, JSON body parsing, Morgan logging. Mounts 4 route groups and starts on port 3000. |
+| [.env](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/.env) | 17 | Environment config: `PORT`, `CHANNEL_NAME`, `CHAINCODE_NAME`, `FABRIC_SAMPLES_PATH`, `EC_API_KEY`, `WALLET_PATH`, `ADMIN_IDENTITY` |
+| [package.json](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/package.json) | 24 | Defines [start](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/services/api.js#22-25), `dev`, [setup](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/tests/failureSimulations.js#46-94), and `simulate` npm scripts. Dependencies: express, fabric-network, fabric-ca-client, cors, dotenv, morgan. |
+
+#### Fabric Integration
+
+| File | Lines | Description |
+|------|-------|-------------|
+| [gateway.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/fabric/gateway.js) | 72 | Connects to the Fabric network using the connection profile and enrolled admin wallet. Exposes [submit()](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric/gateway.js#44-50) (write), [evaluate()](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric/gateway.js#51-57) (read), [parseError()](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric/gateway.js#58-63), and [disconnect()](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric/gateway.js#64-67) functions. Implements singleton pattern for the gateway connection. |
+| [auth.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/middleware/auth.js) | 16 | Express middleware that checks the `x-api-key` header against `EC_API_KEY` environment variable. Returns 401 if missing, 403 if invalid. |
+
+#### Route Handlers
+
+| File | Lines | Endpoints | Auth |
+|------|-------|-----------|------|
+| [admin.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/routes/admin.js) | 84 | `POST /constituency`, `POST /constituency/:id/start`, `POST /constituency/:id/end`, `POST /candidate` | EC key on all |
+| [voter.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/routes/voter.js) | 82 | `POST /register`, `POST /vote`, `GET /history/:epicNumber` | Mixed (register = EC, vote = public) |
+| [results.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/routes/results.js) | 55 | `GET /constituency/:id`, `GET /:constituencyID`, `GET /:constituencyID/votes` | Public |
+| [audit.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/routes/audit.js) | 45 | `GET /voter/:epicNumber`, `GET /votes/:constituencyID` | EC key on all |
+
+#### Setup Scripts
+
+| File | Lines | Description |
+|------|-------|-------------|
+| [buildConnectionProfile.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/scripts/buildConnectionProfile.js) | 100 | Reads TLS certificates from the running Fabric test-network and generates `connection-org1.json` with peer, orderer, and CA endpoints. |
+| [enrollAdmin.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/scripts/enrollAdmin.js) | 65 | Enrolls the [admin](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/bin/osnadmin) identity with the Fabric CA using default credentials ([admin](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/bin/osnadmin)/`adminpw`) and stores the X.509 certificate in the local wallet directory. |
+
+#### Smart Contract (Chaincode)
+
+| File | Lines | Description |
+|------|-------|-------------|
+| [evotingContract.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js) | 378 | The core smart contract. Extends `fabric-contract-api`'s [Contract](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric/gateway.js#18-43) class. Contains 11 functions covering constituency management, voter/candidate registration, vote casting, results querying, and audit history. |
+
+#### Deployment & Shell Helpers
+
+| File | Description |
+|------|-------------|
+| [deploy.sh](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/fabric-samples/test-network/deploy.sh) | One-shot script: fixes CRLF, verifies prerequisites, tears down existing network, starts Fabric with CA, deploys chaincode. |
+| [bootstrap.sh](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/bootstrap.sh) | Downloads Fabric binaries and Docker images for the specified version. |
+| [wsl_setup.sh](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/wsl_setup.sh) | Loads NVM, runs `npm run setup` (build connection profile + enroll admin). |
+| [wsl_start.sh](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/wsl_start.sh) | Loads NVM, runs `npm start` (starts Express backend). |
+| [wsl_frontend.sh](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/wsl_frontend.sh) | Loads NVM, installs frontend deps, starts React dev server on port 3001. |
+| [wsl_test.sh](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/wsl_test.sh) | Loads NVM, runs `npm run simulate` (failure simulation tests). |
+
+---
+
+## 7. Smart Contract (Chaincode) Design
+
+The [EvotingContract](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js) is the heart of the system. It defines **four data types** (docTypes) stored on the blockchain ledger:
+
+### 7.1 On-Chain Data Models
+
+```mermaid
+erDiagram
+    CONSTITUENCY {
+        string constituencyID PK
+        string stateID
+        string electionPhase
+        string docType
+    }
+    VOTER {
+        string epicHash PK
+        string constituencyID FK
+        string stateID
+        string registeredMSP
+        boolean voted
+        string status
+        string docType
+    }
+    CANDIDATE {
+        string candidateID PK
+        string name
+        string party
+        string constituencyID FK
+        int voteCount
+        string docType
+    }
+    VOTE {
+        string voteID PK
+        string candidateID FK
+        string constituencyID FK
+        string timestamp
+        string docType
+    }
+
+    CONSTITUENCY ||--o{ VOTER : "registered in"
+    CONSTITUENCY ||--o{ CANDIDATE : "contests in"
+    CANDIDATE ||--o{ VOTE : "receives"
+```
+
+### 7.2 Chaincode Functions
+
+| # | Function | Type | Access | Description |
+|---|----------|------|--------|-------------|
+| 1 | [createConstituency(id, stateID)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#36-58) | Write | Org1MSP | Creates a constituency with `electionPhase = "CREATED"` |
+| 2 | [startElection(id)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/services/api.js#22-25) | Write | Org1MSP | Sets `electionPhase = "VOTING"` |
+| 3 | [endElection(id)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#78-96) | Write | Org1MSP | Sets `electionPhase = "CLOSED"` |
+| 4 | [getConstituencyStatus(id)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#97-106) | Read | Any | Returns constituency details and current phase |
+| 5 | [registerVoter(epic, constID, stateID)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/services/api.js#35-39) | Write | Org1MSP | Hashes EPIC, validates constituency exists, stores voter |
+| 6 | [registerCandidate(id, name, party, constID)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#155-193) | Write | Org1MSP | Validates constituency, stores candidate with `voteCount = 0` |
+| 7 | [castVote(epic, candidateID)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#198-274) | Write | Any | Core voting logic with 5 validation checks |
+| 8 | [getResults(constID)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/services/api.js#53-56) | Read | Any | Scans all candidates in a constituency with vote counts |
+| 9 | [getVotesByConstituency(constID)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/services/api.js#57-60) | Read | Any | Returns all individual vote transaction records |
+| 10 | [getVoterHistory(epic)](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#345-375) | Read | Any | Returns full ledger history for a voter's key |
+
+### 7.3 Vote Casting — Validation Pipeline
+
+When [castVote()](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/fabric-samples/evoting-chaincode/lib/evotingContract.js#198-274) is invoked, the chaincode performs **5 sequential checks** before recording the vote:
+
+```mermaid
+flowchart TD
+    A["castVote(epicNumber, candidateID)"] --> B{"1. Voter exists?"}
+    B -- No --> E1["❌ Voter does not exist"]
+    B -- Yes --> C{"2. Voter status = ACTIVE?"}
+    C -- No --> E2["❌ Voter not eligible"]
+    C -- Yes --> D{"3. Already voted?"}
+    D -- Yes --> E3["❌ Duplicate vote detected"]
+    D -- No --> F{"4. Candidate exists &\nsame constituency?"}
+    F -- No --> E4["❌ Cross-constituency\nvoting not allowed"]
+    F -- Yes --> G{"5. Election phase\n= VOTING?"}
+    G -- No --> E5["❌ Election not active"]
+    G -- Yes --> H["✅ Record vote on ledger"]
+    H --> I["Increment candidate.voteCount"]
+    I --> J["Set voter.voted = true"]
+```
+
+---
+
+## 8. REST API Reference
+
+**Base URL:** `http://localhost:3000/api`
+
+### Admin Endpoints (require `x-api-key` header)
+
+| Method | Endpoint | Body | Description |
+|--------|----------|------|-------------|
+| `POST` | `/admin/constituency` | `{ constituencyID, stateID }` | Create new constituency |
+| `POST` | `/admin/constituency/:id/start` | — | Start election (VOTING phase) |
+| `POST` | `/admin/constituency/:id/end` | — | End election (CLOSED phase) |
+| `POST` | `/admin/candidate` | `{ candidateID, name, party, constituencyID }` | Register candidate |
+| `POST` | `/voter/register` | `{ epicNumber, constituencyID, stateID }` | Register voter |
+| `GET`  | `/voter/history/:epicNumber` | — | Voter audit trail |
+| `GET`  | `/audit/voter/:epicNumber` | — | Full on-chain voter history |
+| `GET`  | `/audit/votes/:constituencyID` | — | All votes in constituency |
+
+### Public Endpoints (no authentication)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/voter/vote` | Cast a vote (`{ epicNumber, candidateID }`) |
+| `GET`  | `/results/:constituencyID` | Live results (candidates + vote counts) |
+| `GET`  | `/results/constituency/:id` | Constituency status & phase |
+| `GET`  | `/results/:constituencyID/votes` | All vote transaction records |
+| `GET`  | `/health` | Backend health check |
+
+### Error Codes
+
+| HTTP Code | Meaning | When |
+|-----------|---------|------|
+| 401 | Unauthorized | Missing `x-api-key` header on admin route |
+| 403 | Forbidden | Invalid API key or cross-constituency vote |
+| 409 | Conflict | Duplicate entity or duplicate vote |
+| 423 | Locked | Election not in VOTING phase |
+| 404 | Not Found | Constituency/voter not found |
+
+---
+
+## 9. Frontend Application
+
+The frontend is a **React SPA** bootstrapped with Create React App, using React Router v6 for navigation.
+
+### 9.1 Page Map
+
+| Route | Page Component | Access | Description |
+|-------|---------------|--------|-------------|
+| `/` | `PublicResults` | Public | Homepage — search constituency and view live results |
+| `/vote` | `VoterBooth` | Public | Voter enters EPIC, selects candidate, casts vote |
+| `/admin` | `AdminLogin` | Public | Admin login form (enter EC API key) |
+| `/dashboard` | `AdminDashboard` | Protected | Admin overview |
+| `/constituency` | `ConstituencyPage` | Protected | Create & manage constituencies, start/end elections |
+| `/candidates` | `CandidatesPage` | Protected | Register candidates to constituencies |
+| `/results` | `ResultsPage` | Protected | Admin results view |
+| `/audit` | `AuditPage` | Protected | Query voter history and vote records |
+
+### 9.2 Key Components
+
+| Component | Purpose |
+|-----------|---------|
+| [Sidebar.jsx](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/components/Sidebar.jsx) | Navigation sidebar for admin pages |
+| [CandidateCard.jsx](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/components/CandidateCard.jsx) | Displays candidate info (name, party, vote count) |
+| [StatusBadge.jsx](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/components/StatusBadge.jsx) | Visual badge for election phase (CREATED/VOTING/CLOSED) |
+
+### 9.3 Auth Flow
+
+The frontend uses **React Context** (`AuthContext`) to manage admin state:
+
+1. Admin enters the EC API key on the login page.
+2. On login, the key is stored in React state and injected into all Axios requests via [setAdminKey()](file:///c:/Users/raksh/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/chain/evoting-frontend/src/services/api.js#8-12).
+3. Protected routes check `isAdmin` — if `false`, the user is redirected to `/admin`.
+4. Logout clears the API key from Axios headers and resets state.
+
+> [!NOTE]
+> The API key is not stored in localStorage for security — it lives only in memory and is lost on page refresh.
+
+---
+
+## 10. Data Flow & Sequence Diagrams
+
+### 10.1 Vote Casting Flow
+
+```mermaid
+sequenceDiagram
+    participant V as Voter (Browser)
+    participant API as Express Backend
+    participant GW as Fabric Gateway
+    participant P as Peer Node
+    participant CC as EvotingContract
+    participant L as Ledger
+
+    V->>API: POST /api/voter/vote {epicNumber, candidateID}
+    API->>GW: submit('castVote', epic, candidateID)
+    GW->>P: submitTransaction (gRPC + TLS)
+    P->>CC: invoke castVote()
+    CC->>L: getState(epicHash) — check voter
+    CC->>L: getState(candidateID) — check candidate
+    CC->>L: getState(constituencyID) — check phase
+    CC->>L: putState(voteID) — store vote record
+    CC->>L: putState(candidateID) — increment count
+    CC->>L: putState(epicHash) — mark voted=true
+    CC-->>P: "Vote successfully cast"
+    P-->>GW: Transaction committed
+    GW-->>API: Response buffer
+    API-->>V: { success: true, message: "Vote successfully cast" }
+```
+
+### 10.2 Admin Constituency Creation Flow
+
+```mermaid
+sequenceDiagram
+    participant A as Admin (Browser)
+    participant API as Express Backend
+    participant Auth as Auth Middleware
+    participant GW as Fabric Gateway
+    participant CC as EvotingContract
+
+    A->>API: POST /api/admin/constituency {id, stateID}<br/>(x-api-key header)
+    API->>Auth: Check x-api-key
+    Auth-->>API: ✅ Valid
+    API->>GW: submit('createConstituency', id, stateID)
+    GW->>CC: invoke createConstituency()
+    CC->>CC: Check MSP = Org1MSP
+    CC->>CC: Check constituency doesn't exist
+    CC-->>GW: JSON constituency object
+    GW-->>API: Parsed response
+    API-->>A: { success: true, data: {...} }
+```
+
+---
+
+## 11. Security Mechanisms
+
+| Layer | Mechanism | Details |
+|-------|-----------|---------|
+| **Network** | TLS Encryption | All gRPC communication between SDK and peers uses TLS certificates |
+| **Identity** | X.509 Certificates | Admin identity enrolled with Fabric CA; stored in local wallet |
+| **API** | API Key Authentication | Admin routes require `x-api-key: EC-NATIONAL-2024` header |
+| **Chaincode** | MSP Verification | Smart contract checks `ctx.clientIdentity.getMSPID() === "Org1MSP"` |
+| **Voter Privacy** | SHA-256 Hashing | EPIC numbers are stored only as hashed values on the ledger |
+| **Vote Integrity** | Duplicate Detection | Chaincode checks `voter.voted === true` before allowing a vote |
+| **Constituency Isolation** | Cross-constituency Check | Voter's constituency must match candidate's constituency |
+| **Election Phase** | State Machine | Votes only accepted when `electionPhase === "VOTING"` |
+| **Immutability** | Blockchain | Once committed, ledger entries cannot be altered or deleted |
+| **Audit** | History API | `getHistoryForKey()` provides full change log for any entity |
+
+---
+
+## 12. Testing & Attack Simulations
+
+The project includes a comprehensive **8-test attack & defense simulation suite** ([failureSimulations.js](file:///c:/Users/raksh/OneDrive/ドキュメント/chain/tests/failureSimulations.js)) that validates the system's resilience:
+
+| Test # | Scenario | Expected Outcome | HTTP Code |
+|--------|----------|-------------------|-----------|
+| 1 | Valid Vote | ✅ Vote accepted | 200 |
+| 2 | Duplicate Vote | ❌ Rejected — `DUPLICATE_VOTE` | 409 |
+| 3 | Cross-Constituency Vote | ❌ Rejected — `VOTE_REJECTED` | 403 |
+| 4 | Vote After Election Closed | ❌ Rejected — `ELECTION_INACTIVE` | 423 |
+| 5 | Unregistered Voter | ❌ Rejected — voter doesn't exist | non-200 |
+| 6 | Vote Before Election Starts | ❌ Rejected — election not active | non-200 |
+| 7 | Unauthorized Admin Action | ❌ Rejected — no API key | 401 |
+| 8 | Full Election Cycle + Results | ✅ Complete flow: vote → end → results | 200 |
+
+**Run the tests:**
+```bash
+npm run simulate
+```
+
+---
+
+## 13. Setup & Deployment Plan
+
+### Prerequisites
+
+| # | Software | Version | Purpose |
+|---|----------|---------|---------|
+| 1 | **WSL 2** | latest | Linux environment for Fabric |
+| 2 | **Docker Desktop** | latest | Container runtime for blockchain nodes |
+| 3 | **Git** | latest | Version control |
+| 4 | **Node.js** | v18.x | Backend & chaincode runtime (via NVM in WSL) |
+
+### Step-by-Step Setup
+
+#### Phase 1: One-Time Environment Setup
+
+```
+┌────────────────────────────────────────────────────────┐
+│ Step 1: Install WSL 2                                  │
+│   > wsl --install                                      │
+│   (Restart PC, create Linux user)                      │
+├────────────────────────────────────────────────────────┤
+│ Step 2: Install Docker Desktop                         │
+│   Enable WSL Integration → Ubuntu                      │
+├────────────────────────────────────────────────────────┤
+│ Step 3: Install Node.js 18 via NVM in WSL              │
+│   > curl -o- .../nvm/install.sh | bash                 │
+│   > nvm install 18                                     │
+├────────────────────────────────────────────────────────┤
+│ Step 4: Download Fabric binaries & Docker images       │
+│   > cd fabric-samples && bash bootstrap.sh             │
+│   > docker pull hyperledger/fabric-nodeenv:2.5          │
+└────────────────────────────────────────────────────────┘
+```
+
+#### Phase 2: Deploy Blockchain Network
+
+```bash
+# From PowerShell — deploys everything in one command:
+wsl bash -c "cd /mnt/d/chain/fabric-samples/test-network && bash deploy.sh"
+```
+
+This script performs:
+1. Fixes CRLF line endings in all scripts
+2. Verifies prerequisites (jq, Docker, peer binary, config)
+3. Tears down any existing Fabric network
+4. Starts Fabric network with CA on channel `mychannel`
+5. Deploys the `evoting` chaincode
+
+#### Phase 3: Setup Backend
+
+```bash
+# Build connection profile + enroll admin identity:
+wsl bash -c "bash /mnt/d/chain/wsl_setup.sh"
+
+# Start the backend server:
+wsl bash -c "bash /mnt/d/chain/wsl_start.sh"
+```
+
+**Verify:** Open `http://localhost:3000/health` in browser.
+
+#### Phase 4: Start Frontend
+
+```bash
+# In a NEW PowerShell window:
+wsl bash -c "bash /mnt/d/chain/wsl_frontend.sh"
+```
+
+**Verify:** Open `http://localhost:3001` in browser.
+
+#### Phase 5: Test the System
+
+```bash
+# In another PowerShell window:
+wsl bash -c "bash /mnt/d/chain/wsl_test.sh"
+```
+
+### After Reboot Procedure
+
+Every time the laptop restarts, follow these steps:
+
+1. **Open Docker Desktop** → Wait for green "Running" status
+2. **Deploy blockchain:** `wsl bash -c "cd /mnt/d/chain/fabric-samples/test-network && bash deploy.sh"`
+3. **Start backend:** `wsl bash -c "bash /mnt/d/chain/wsl_start.sh"`
+4. **Start frontend** (new terminal): `wsl bash -c "bash /mnt/d/chain/wsl_frontend.sh"`
+5. **Open browser:** `http://localhost:3001`
+
+### Quick Usage Guide
+
+| Action | Steps |
+|--------|-------|
+| **Admin Login** | Go to `/admin` → Enter API key: `EC-NATIONAL-2024` |
+| **Create Constituency** | Dashboard → Constituency → Create (e.g., ID: `CONST_001`, State: `DL`) |
+| **Register Candidate** | Dashboard → Candidates → Register (name, party, constituency) |
+| **Register Voter** | Dashboard → Constituency → Register voter (EPIC, constituency, state) |
+| **Start Election** | Dashboard → Constituency → Click "Start Election" |
+| **Cast Vote** | Go to `/vote` → Enter EPIC number → Select candidate → Submit |
+| **View Results** | Go to `/` → Search constituency ID → See live results |
+| **End Election** | Dashboard → Constituency → Click "End Election" |
+| **Audit Trail** | Dashboard → Audit → Search voter EPIC or constituency ID |
+
+---
+
+> [!TIP]
+> **For presentations:** Run the attack simulation suite (`npm run simulate`) to demonstrate the system's security guarantees in real-time — duplicate vote rejection, unauthorized access blocking, and cross-constituency protection.
+
+---
+
+*Report generated on 2 March 2026 for the National E-Voting Blockchain System project.*
