@@ -162,63 +162,145 @@ Network Components:
 
 ## 6. Cryptographic Design — Blind Signature Protocol
 
-### 6.1 Background
-
-RSA Blind Signatures were introduced by David Chaum (1983) to enable a signer to sign a message without learning its contents. This property maps directly to the requirement that an election authority can authorize a vote without learning who it is cast for.
-
-### 6.2 Protocol Flow
-
-```
-Voter (Client Browser)                    Backend Server (EC Authority)
-       |                                              |
-       |  Step 1: Generate random 256-bit token T     |
-       |  Step 2: Fetch server RSA public key (n, e)  |
-       |  Step 3: Generate random blinding factor r   |
-       |          where gcd(r, n) = 1                 |
-       |  Step 4: Compute blinded token:              |
-       |          B = T * r^e mod n                   |
-       |                                              |
-       |-------- POST /api/voter/blind-sign -------->|
-       |         { epicId, blindedToken: B }          |
-       |                                              |
-       |                   Step 5: Verify EPIC ID     |
-       |                   Step 6: Check not yet used |
-       |                   Step 7: Sign blinded token |
-       |                     S_b = B^d mod n          |
-       |                   Step 8: Mark voter as used |
-       |                                              |
-       |<------------- { blindedSignature: S_b } -----|
-       |                                              |
-       |  Step 9: Unblind the signature:              |
-       |          S = S_b * r^(-1) mod n              |
-       |          (S is now a valid RSA signature      |
-       |           over T, unlinkable to B)            |
-       |  Step 10: Select candidate                   |
-       |                                              |
-       |-------- POST /api/voter/vote ------------->  |
-       |         { token: T, signature: S,            |
-       |           candidateId: X }                   |
-       |         (No identity information sent)       |
-       |                                              |
-       |              Step 11: Verify signature:      |
-       |                T^e ≡ S^... mod n (valid)     |
-       |              Step 12: Commit to blockchain   |
-       |              Step 13: Return transaction ID  |
-       |                                              |
-       |<------------- { txId, success: true } -------|
-```
-
-### 6.3 Security Properties
-
-| Property | Guarantee |
-|---|---|
-| **Anonymity** | Server cannot link submitted vote to registered voter |
-| **Unforgeability** | Only the EC private key can produce valid vote signatures |
-| **One-vote enforcement** | Each voter can obtain exactly one blind signature (enforced on-chain) |
-| **Double-spend prevention** | Each token can be submitted exactly once (enforced at chaincode level) |
+This system implements an **RSA Blind Signature protocol** to ensure that voter authentication and vote submission remain completely independent processes. The Election Commission verifies voter eligibility without learning the voter’s final choice, thereby preserving ballot secrecy while maintaining election integrity.
 
 ---
 
+### Protocol Workflow
+
+<p align="center">
+  <img src="docs/blind-signature-flow.png" width="850" alt="Blind Signature Voting Protocol">
+</p>
+
+The voting protocol operates in four stages: **Token Generation, Blind Signature Issuance, Vote Submission, and Blockchain Recording**.
+
+---
+
+### Phase 1 — Token Generation and Blinding (Client Browser)
+
+The voter’s browser generates a random voting token and blinds it before sending it to the server.
+
+Steps:
+
+1. Generate a **random 256-bit voting token `T`**.
+2. Retrieve the Election Commission **RSA public key `(n, e)`**.
+3. Generate a random **blinding factor `r`** such that `gcd(r, n) = 1`.
+4. Compute the **blinded token**:
+
+```
+B = T × r^e mod n
+```
+
+The blinded token hides the original value `T`, preventing the server from determining the vote identifier.
+
+---
+
+### Phase 2 — Blind Signature Issuance (Election Commission Server)
+
+The client sends the blinded token to the backend server.
+
+Request:
+
+```
+POST /api/voter/blind-sign
+
+{
+  "epicId": "<voter_epic>",
+  "blindedToken": "B"
+}
+```
+
+Server verification steps:
+
+1. Verify that the **EPIC ID is registered**.
+2. Ensure the voter **has not already received a blind signature**.
+3. Sign the blinded token using the **EC private key `(d)`**:
+
+```
+S_b = B^d mod n
+```
+
+4. Mark the voter as **signature issued**.
+
+Response:
+
+```
+{
+  "blindedSignature": "S_b"
+}
+```
+
+At this stage the server has signed the token **without knowing the original token value**.
+
+---
+
+### Phase 3 — Signature Unblinding and Vote Submission
+
+The voter removes the blinding factor locally in the browser:
+
+```
+S = S_b × r⁻¹ mod n
+```
+
+This produces `S`, a valid RSA signature over token `T`. Because the server never saw `T`, it cannot link the signature to the voter.
+
+The anonymous vote is then submitted:
+
+```
+POST /api/voter/vote
+
+{
+  "token": "T",
+  "signature": "S",
+  "candidateId": "X"
+}
+```
+
+No identity information is included in this request.
+
+---
+
+### Phase 4 — Verification and Blockchain Recording
+
+The backend verifies the signature before committing the vote to the blockchain.
+
+Signature validation:
+
+```
+T^e ≡ S mod n
+```
+
+If valid:
+
+1. The vote is forwarded to the **Hyperledger Fabric smart contract**.
+2. The chaincode checks that the **token has not been used previously**.
+3. The vote is **recorded as a blockchain transaction**.
+4. The system returns a **transaction ID** confirming successful recording.
+
+Response:
+
+```
+{
+  "txId": "<blockchain_transaction_id>",
+  "success": true
+}
+```
+
+---
+
+### Security Guarantees
+
+| Property | Description |
+|--------|-------------|
+| **Ballot Anonymity** | The Election Commission cannot link a vote to a voter identity |
+| **Unforgeability** | Only the EC private key can generate valid vote signatures |
+| **Single Vote Enforcement** | Each voter receives exactly one blind signature |
+| **Double Vote Prevention** | Each token can be submitted only once |
+| **Auditability** | All votes are immutably recorded on the blockchain ledger |
+
+---
+
+This cryptographic separation between **identity verification** and **vote submission** ensures that the system preserves both **voter privacy** and **election integrity**, while providing a verifiable and tamper-resistant audit trail through the blockchain network.
 ## 7. Project Structure
 
 ```
