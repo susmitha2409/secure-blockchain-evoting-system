@@ -67,50 +67,42 @@ This system proposes a blockchain-anchored digital voting infrastructure that pr
 
 ## 3. System Architecture
 
-The system is structured across three distinct layers:
+The system follows a three-layer architecture that separates the user interface, application logic, and blockchain network.
 
-```
-+----------------------------------------------------------------------+
-|                          CLIENT LAYER                                |
-|                                                                      |
-|   +------------------+  +-------------------+  +------------------+ |
-|   |   Voter Booth    |  |  Admin Dashboard  |  |  Public Results  | |
-|   |   (React SPA)    |  |  (React SPA)      |  |  (React SPA)     | |
-|   +--------+---------+  +---------+---------+  +--------+---------+ |
-|            |                      |                      |           |
-|            +----------------------+----------------------+           |
-|                                   |                                  |
-|              Blind Signature Computation (client-side, in-browser)  |
-+-----------------------------------+----------------------------------+
-                                    | HTTPS / REST
-+-----------------------------------v----------------------------------+
-|                       APPLICATION LAYER (Node.js / Express)         |
-|                                                                      |
-|   +--------------+  +--------------+  +------------+  +----------+ |
-|   | /api/admin   |  | /api/voter   |  |/api/results|  |/api/audit| |
-|   | [EC-gated]   |  | [Blind Sign] |  | [Public]   |  |[EC-gated]| |
-|   +--------------+  +--------------+  +------------+  +----------+ |
-|                                                                      |
-|                  Fabric Gateway  (fabric-network SDK v2.2)          |
-+-----------------------------------+----------------------------------+
-                                    | gRPC (TLS)
-+-----------------------------------v----------------------------------+
-|                    BLOCKCHAIN LAYER (Hyperledger Fabric 2.5)        |
-|                                                                      |
-|    Channel: mychannel                                                |
-|    Chaincode: evoting  (Node.js)                                     |
-|                                                                      |
-|    World State Objects:                                              |
-|    - CONST::<id>       Constituency records                          |
-|    - CAND::<id>        Candidate records                             |
-|    - VOTER::<epic>     Voter registration records                    |
-|    - VOTE::<token>     Anonymous vote records                        |
-|    - AUDIT::<txid>     Immutable audit log entries                   |
-|                                                                      |
-|    Org1MSP -- Peer0 -- CouchDB (state database)                      |
-|    OrdererMSP -- Orderer (Solo consensus)                            |
-+----------------------------------------------------------------------+
-```
+### Client Layer
+- **Voter Booth (React SPA):** Interface for voters to securely cast their votes.
+- **Admin Dashboard (React SPA):** Used by the Election Commission to manage constituencies, candidates, and elections.
+- **Public Results Portal:** Allows citizens to view election results transparently.
+- **Blind Signature Computation:** Performed client-side to ensure voter anonymity.
+
+### Application Layer
+- **Node.js + Express API** that handles authentication and voting requests.
+- REST endpoints:
+  - `/api/admin` – Election Commission operations
+  - `/api/voter` – Voter registration and voting
+  - `/api/results` – Public election results
+  - `/api/audit` – Election audit logs
+- **Fabric Gateway (fabric-network SDK)** connects the backend to the blockchain network.
+
+### Blockchain Layer
+- **Hyperledger Fabric Network**
+- Channel: `mychannel`
+- Smart Contract: `evoting`
+
+Ledger objects stored on blockchain:
+
+| Key | Description |
+|----|-------------|
+| CONST::<id> | Constituency records |
+| CAND::<id> | Candidate records |
+| VOTER::<epic> | Registered voter records |
+| VOTE::<token> | Anonymous vote transactions |
+| AUDIT::<txid> | Immutable audit logs |
+
+Network Components:
+- **Peer Node** – Executes smart contracts and stores ledger
+- **Orderer Node** – Orders transactions into blocks
+- **CouchDB** – World state database
 
 ### 3.1 Component Responsibilities
 
